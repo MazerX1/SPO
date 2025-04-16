@@ -1,10 +1,10 @@
 import { createRouter, createWebHistory } from "vue-router";
-import Reports from "../views/ReportList.vue";
-import ReportCreate from "../views/ReportCreate.vue";
-import ReportEdit from "../views/ReportEdit.vue"; // Должен быть импорт
 
 import HomePage from "../views/HomePage.vue";
-import ChartsPage from "../views/ChartsPage.vue";
+import DataLoaderPage from "@/views/DataLoaderPage.vue";
+import ReportPage from "@/views/ReportPage.vue";
+import TableDataPage from "@/views/TableDataPage.vue";
+import ReportBuilderPage from "@/views/ReportBuilderPage.vue";
 
 const routes = [
   {
@@ -13,29 +13,29 @@ const routes = [
     component: HomePage, // Используем новое имя
   },
   {
-    path: "/reports",
-    name: "reports",
-    component: Reports,
+    path: "/",
+    name: "TableData",
+    component: TableDataPage,
   },
   {
-    path: "/reports/create",
-    name: "create-report",
-    component: ReportCreate,
+    path: "/report-builder",
+    name: "ReportBuilder",
+    component: ReportBuilderPage,
   },
   {
-    path: "/reports/edit/:id",
-    name: "edit-report",
-    component: ReportEdit,
+    path: "/report",
+    name: "ReportPage",
+    component: ReportPage,
   },
   {
-    path: "/charts",
-    name: "charts",
-    component: ChartsPage, // Используем новое имя
+    path: "/data-loader",
+    name: "DataLoader",
+    component: DataLoaderPage,
   },
 ];
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(process.env.BASE_URL),
   routes,
 });
 
