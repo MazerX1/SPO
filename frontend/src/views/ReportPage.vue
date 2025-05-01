@@ -1,233 +1,287 @@
 <template>
-  <div class="report-page">
-    <h1>Отчет</h1>
+  <div class="report-page" ref="reportContent">
+    <h1>Просмотр отчета</h1>
 
-    <!-- Графики в одном ряду -->
-    <div class="charts">
-      <div class="chart-container">
-        <LineChart :data="chartData" />
-      </div>
-      <div class="chart-container">
-        <BarChart :data="chartData" />
-      </div>
-      <div class="chart-container">
-        <PieChart :data="chartData" />
-      </div>
-    </div>
-
-    <!-- Ввод для настройки порога и цвета -->
-    <div class="color-settings">
-      <label for="threshold">Пороговое значение:</label>
+    <div class="input-container">
+      <label for="threshold">Введите пороговое значение:</label>
       <input
         type="number"
-        v-model="threshold"
-        placeholder="Введите пороговое значение"
-        min="0"
+        id="threshold"
+        v-model.number="thresholdValue"
+        placeholder="Порог"
       />
-      <label for="color">Цвет для значений ниже порога:</label>
-      <input
-        type="color"
-        v-model="highlightColor"
-        placeholder="Выберите цвет"
-      />
+
+      <label for="highlightColor">Цвет для порога:</label>
+      <input type="color" id="highlightColor" v-model="highlightColor" />
     </div>
 
-    <!-- Таблица с выбранными данными -->
-    <table>
+    <!-- Графики -->
+    <div class="charts">
+      <div
+        v-for="field in reportData.chartColumns"
+        :key="field"
+        class="chart-container"
+      >
+        <h3>{{ field }}</h3>
+        <canvas :id="'chart-' + field"></canvas>
+      </div>
+    </div>
+
+    <!-- Таблица -->
+    <table class="report-table">
       <thead>
         <tr>
-          <th v-for="col in selectedTableColumns" :key="col">{{ col }}</th>
+          <th v-for="col in reportData.tableColumns" :key="col">{{ col }}</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(row, index) in tableData" :key="index">
+        <tr v-for="(item, rowIndex) in tableData.rows" :key="rowIndex">
           <td
-            v-for="col in selectedTableColumns"
+            v-for="col in reportData.tableColumns"
             :key="col"
-            :style="{
-              backgroundColor: getHighlightColor(row[col]),
-            }"
+            :style="getCellStyle(item[col], rowIndex, col)"
+            @click="openColorPicker(rowIndex, col)"
           >
-            {{ row[col] }}
+            {{ item[col] }}
+            <input
+              type="color"
+              :ref="(el) => setCellColorPickerRef(el)"
+              :data-ref-key="`${rowIndex}-${col}`"
+              style="display: none"
+              @input="setCustomCellColor($event, rowIndex, col)"
+            />
           </td>
         </tr>
       </tbody>
     </table>
 
-    <!-- Кнопка для сохранения отчета в PDF -->
-    <button @click="saveReportToPDF" class="btn">Сохранить в PDF</button>
+    <button class="save-button" @click="saveAsPDF" v-if="!isPdfSaving">
+      Сохранить отчет в PDF
+    </button>
   </div>
 </template>
 
-<script>
-// Импортируем графики и jsPDF
-import { Line, Bar, Pie } from "vue-chartjs";
-import { jsPDF } from "jspdf";
-import {
-  Chart as ChartJS,
-  Title,
-  Tooltip,
-  Legend,
-  LineElement,
-  PointElement,
-  BarElement,
-  CategoryScale,
-  LinearScale,
-  ArcElement,
-} from "chart.js";
+<script setup>
+import { ref, reactive, onMounted, nextTick } from "vue";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
+import { Chart, registerables } from "chart.js";
 
-// Регистрация графиков
-ChartJS.register(
-  Title,
-  Tooltip,
-  Legend,
-  LineElement,
-  PointElement,
-  BarElement,
-  CategoryScale,
-  LinearScale,
-  ArcElement
-);
+Chart.register(...registerables);
 
-export default {
-  name: "ReportPage",
-  components: {
-    LineChart: Line,
-    BarChart: Bar,
-    PieChart: Pie,
-  },
-  data() {
-    return {
-      tableData: [],
-      selectedTableColumns: [],
-      chartData: {
-        labels: [],
-        datasets: [],
-      },
-      threshold: 50, // Пороговое значение для выделения
-      highlightColor: "#ff0000", // Цвет для значений ниже порога
-    };
-  },
-  created() {
-    const reportData = JSON.parse(localStorage.getItem("reportData"));
-    if (reportData) {
-      this.selectedTableColumns = reportData.tableColumns;
-      // Загружаем данные таблицы из localStorage
-      const data = JSON.parse(localStorage.getItem("tableData"));
-      if (data) {
-        this.tableData = data.rows;
-        this.updateChartData();
-      }
-    }
-  },
-  methods: {
-    updateChartData() {
-      const labels = this.tableData.map(
-        (row) => row[this.selectedTableColumns[0]]
-      );
-      const dataset = {
-        label: "Данные для графика",
-        data: this.tableData.map((row) => row[this.selectedTableColumns[1]]), // Пример: берем данные из второго столбца для графика
-        backgroundColor: "rgba(75, 192, 192, 0.2)",
-        borderColor: "rgba(75, 192, 192, 1)",
-        borderWidth: 1,
-      };
-      this.chartData.labels = labels;
-      this.chartData.datasets = [dataset];
-    },
+const reportContent = ref(null);
 
-    getHighlightColor(value) {
-      // Возвращаем цвет, если значение ниже порога
-      return value < this.threshold ? this.highlightColor : "transparent";
-    },
+const reportData = reactive({
+  tableColumns: [],
+  chartColumns: [],
+});
 
-    saveReportToPDF() {
-      const doc = new jsPDF();
-      doc.text("Отчет", 20, 20);
+const tableData = reactive({
+  columns: [],
+  rows: [],
+});
 
-      // Пример добавления таблицы в PDF
-      let yPosition = 30;
-      this.tableData.forEach((row) => {
-        let rowText = this.selectedTableColumns
-          .map((col) => row[col])
-          .join(" | ");
-        doc.text(rowText, 20, yPosition);
-        yPosition += 10;
+const thresholdValue = ref(null);
+const highlightColor = ref("#ffcccc");
+const isPdfSaving = ref(false);
+
+const highlightedCells = reactive({});
+const cellColorPickers = ref({});
+
+onMounted(() => {
+  const storedReport = JSON.parse(localStorage.getItem("reportData"));
+  const storedTable = JSON.parse(localStorage.getItem("tableData"));
+
+  if (storedReport && storedTable) {
+    reportData.tableColumns = storedReport.tableColumns;
+    reportData.chartColumns = storedReport.chartColumns;
+    tableData.columns = storedTable.columns;
+    tableData.rows = storedTable.rows;
+
+    nextTick(() => {
+      createCharts();
+    });
+  }
+});
+
+function createCharts() {
+  reportData.chartColumns.forEach((field) => {
+    const ctx = document.getElementById("chart-" + field);
+    if (ctx) {
+      new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: tableData.rows.map((_, index) => `Точка ${index + 1}`),
+          datasets: [
+            {
+              label: field,
+              data: tableData.rows.map((row) => row[field]),
+              backgroundColor: "rgba(75, 192, 192, 0.2)",
+              borderColor: "rgba(75, 192, 192, 1)",
+              borderWidth: 2,
+              fill: true,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "top",
+            },
+          },
+        },
       });
+    }
+  });
+}
 
-      // Сохраняем PDF
-      doc.save("report.pdf");
-    },
-  },
-};
+function setCellColorPickerRef(el) {
+  if (el) {
+    const key = el.dataset.refKey;
+    cellColorPickers.value[key] = el;
+  }
+}
+
+function openColorPicker(row, col) {
+  const key = `${row}-${col}`;
+  const inputEl = cellColorPickers.value[key];
+  if (inputEl) inputEl.click();
+}
+
+function setCustomCellColor(event, row, col) {
+  const color = event.target.value;
+  highlightedCells[`${row}-${col}`] = color;
+}
+
+function getCellStyle(value, row, col) {
+  const key = `${row}-${col}`;
+  if (highlightedCells[key]) {
+    return { backgroundColor: highlightedCells[key] };
+  }
+  if (
+    thresholdValue.value !== null &&
+    !isNaN(value) &&
+    value < thresholdValue.value
+  ) {
+    return { backgroundColor: highlightColor.value };
+  }
+  return {};
+}
+
+async function saveAsPDF() {
+  isPdfSaving.value = true;
+  await nextTick();
+
+  const element = reportContent.value;
+  const canvas = await html2canvas(element, {
+    scale: 2,
+    useCORS: true,
+  });
+  const imgData = canvas.toDataURL("image/png");
+  const pdf = new jsPDF("p", "mm", "a4");
+
+  const pdfWidth = pdf.internal.pageSize.getWidth();
+  const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+  pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+
+  const totalPages = pdf.internal.pages.length;
+  for (let i = 1; i <= totalPages; i++) {
+    pdf.setPage(i);
+    pdf.text(
+      `Стр. ${i} из ${totalPages}`,
+      pdf.internal.pageSize.getWidth() - 50,
+      pdf.internal.pageSize.getHeight() - 10
+    );
+  }
+
+  pdf.save("report.pdf");
+  isPdfSaving.value = false;
+}
 </script>
 
 <style scoped>
 .report-page {
-  text-align: center;
-  margin-top: 50px;
+  padding: 20px;
+  background: white;
+  font-family: Arial, sans-serif;
+}
+
+.input-container {
+  margin-bottom: 20px;
+}
+
+.input-container label {
+  margin-right: 10px;
+}
+
+.input-container input[type="number"] {
+  width: 100px;
+  margin-right: 20px;
 }
 
 .charts {
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 30px;
 }
 
 .chart-container {
-  width: 30%;
-  margin: 0 10px;
+  width: 300px;
+  height: 300px;
+  background: #f9f9f9;
+  padding: 10px;
+  border-radius: 8px;
 }
 
-table {
-  margin: 20px auto;
+.report-table {
+  width: 100%;
   border-collapse: collapse;
-  width: 80%;
+  margin-bottom: 30px;
 }
 
-th,
-td {
+.report-table th,
+.report-table td {
   border: 1px solid #ccc;
   padding: 8px;
+  text-align: center;
+  cursor: pointer;
 }
 
-th {
+.save-button {
+  display: block;
+  margin: 0 auto;
+  padding: 12px 24px;
   background-color: #007bff;
   color: white;
-}
-
-.color-settings {
-  margin: 20px 0;
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-}
-
-input[type="number"],
-input[type="color"] {
-  padding: 8px;
-  font-size: 1rem;
-  width: 150px;
-}
-
-.btn {
-  background-color: #28a745;
-  color: white;
+  font-size: 16px;
   border: none;
   border-radius: 5px;
-  padding: 8px 16px;
   cursor: pointer;
-  margin-top: 20px;
 }
 
-.btn:hover {
-  background-color: #218838;
+.save-button:hover {
+  background-color: #0056b3;
 }
 
-/* Адаптивность для мобильных устройств */
-@media (max-width: 768px) {
+@media print {
+  .save-button,
+  .input-container {
+    display: none;
+  }
+
+  .report-page {
+    width: 210mm;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
   .charts {
-    flex-direction: column;
+    display: block;
   }
 
   .chart-container {
@@ -235,8 +289,9 @@ input[type="color"] {
     margin-bottom: 20px;
   }
 
-  .color-settings {
-    flex-direction: column;
+  .report-table {
+    width: 100%;
+    margin-top: 20px;
   }
 }
 </style>
