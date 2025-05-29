@@ -105,15 +105,23 @@ export default {
           "db_credentials",
           JSON.stringify(this.dbCredentials)
         );
-
+        const token = localStorage.getItem("access_token");
+        console.log("Отправляемые данные:", this.dbCredentials);
         // Отправляем запрос на сервер
         const response = await fetch("http://localhost:5000/api/load_tables", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify(this.dbCredentials),
         });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Ошибка ответа:", response.status, errorText);
+          throw new Error(`Ошибка сервера: ${response.status}`);
+        }
         const data = await response.json();
 
         if (response.ok) {

@@ -1,63 +1,81 @@
 <template>
   <div class="report-page" ref="reportContent">
-    <h1>Просмотр отчета</h1>
+    <h1>{{ selectedFormLabel }}</h1>
+    <p class="username">Пользователь: {{ username }}</p>
 
-    <div class="input-container">
-      <label for="threshold">Введите пороговое значение:</label>
-      <input
-        type="number"
-        id="threshold"
-        v-model.number="thresholdValue"
-        placeholder="Порог"
-      />
+    <div v-if="dataLoaded">
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th
+              v-for="col in reportData.tableColumns"
+              :key="col"
+              @click="selectThresholdColumn(col)"
+              style="cursor: pointer"
+            >
+              {{ translateColumn(col) }}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(item, rowIndex) in tableData.rows" :key="rowIndex">
+            <td
+              v-for="col in reportData.tableColumns"
+              :key="col"
+              :style="getCellStyle(item[col], rowIndex, col)"
+              @click="openColorPicker(rowIndex, col)"
+            >
+              {{ item[col] }}
+              <input
+                type="color"
+                :ref="setCellColorPickerRef"
+                :data-key="`${rowIndex}-${col}`"
+                style="display: none"
+                @input="setCustomCellColor($event, rowIndex, col)"
+              />
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
-      <label for="highlightColor">Цвет для порога:</label>
-      <input type="color" id="highlightColor" v-model="highlightColor" />
-    </div>
+      <div class="charts">
+        <div
+          v-for="field in reportData.chartColumns"
+          :key="field"
+          class="chart-container"
+        >
+          <h3>{{ translateColumn(field) }}</h3>
+          <canvas :id="'chart-' + field" class="chart-canvas"></canvas>
+        </div>
+      </div>
 
-    <!-- Графики -->
-    <div class="charts">
-      <div
-        v-for="field in reportData.chartColumns"
-        :key="field"
-        class="chart-container"
-      >
-        <h3>{{ field }}</h3>
-        <canvas :id="'chart-' + field"></canvas>
+      <div class="action-buttons">
+        <button class="save-button" @click="saveAsPDF" :disabled="isPdfSaving">
+          {{ isPdfSaving ? "Сохраняю..." : "Сохранить отчет в PDF" }}
+        </button>
+        <button
+          class="print-button"
+          @click="printReport"
+          :style="{ display: isPdfSaving ? 'none' : 'block' }"
+        >
+          Печать отчета
+        </button>
+        <button
+          class="save-button"
+          @click="saveReportToDatabase"
+          :style="{ display: isPdfSaving ? 'none' : 'block' }"
+        >
+          Сохранить отчет в БД
+        </button>
       </div>
     </div>
 
-    <!-- Таблица -->
-    <table class="report-table">
-      <thead>
-        <tr>
-          <th v-for="col in reportData.tableColumns" :key="col">{{ col }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="(item, rowIndex) in tableData.rows" :key="rowIndex">
-          <td
-            v-for="col in reportData.tableColumns"
-            :key="col"
-            :style="getCellStyle(item[col], rowIndex, col)"
-            @click="openColorPicker(rowIndex, col)"
-          >
-            {{ item[col] }}
-            <input
-              type="color"
-              :ref="(el) => setCellColorPickerRef(el)"
-              :data-ref-key="`${rowIndex}-${col}`"
-              style="display: none"
-              @input="setCustomCellColor($event, rowIndex, col)"
-            />
-          </td>
-        </tr>
-      </tbody>
-    </table>
-
-    <button class="save-button" @click="saveAsPDF" v-if="!isPdfSaving">
-      Сохранить отчет в PDF
-    </button>
+    <div v-else>
+      <p>
+        Нет данных для отображения отчета. Пожалуйста, вернитесь на предыдущую
+        страницу.
+      </p>
+    </div>
   </div>
 </template>
 
@@ -69,40 +87,108 @@ import { Chart, registerables } from "chart.js";
 
 Chart.register(...registerables);
 
+// Основные состояния
 const reportContent = ref(null);
+const dataLoaded = ref(false);
+const isPdfSaving = ref(false);
+const highlightColor = ref("#ffcccc");
+const username = ref(localStorage.getItem("username") || "");
 
+// Данные отчета
 const reportData = reactive({
   tableColumns: [],
   chartColumns: [],
 });
-
-const tableData = reactive({
-  columns: [],
-  rows: [],
-});
-
-const thresholdValue = ref(null);
-const highlightColor = ref("#ffcccc");
-const isPdfSaving = ref(false);
-
+const tableData = reactive({ rows: [] });
+const selectedFormLabel = ref("");
+const anomalyRules = ref([]);
 const highlightedCells = reactive({});
 const cellColorPickers = ref({});
 
-onMounted(() => {
-  const storedReport = JSON.parse(localStorage.getItem("reportData"));
-  const storedTable = JSON.parse(localStorage.getItem("tableData"));
+function selectThresholdColumn(col) {
+  const threshold = prompt(
+    `Введите пороговое значение для поля "${translateColumn(col)}":`
+  );
+  if (threshold === null || isNaN(threshold)) {
+    alert("Некорректное значение порога.");
+    return;
+  }
 
-  if (storedReport && storedTable) {
-    reportData.tableColumns = storedReport.tableColumns;
-    reportData.chartColumns = storedReport.chartColumns;
-    tableData.columns = storedTable.columns;
-    tableData.rows = storedTable.rows;
+  const color = prompt(
+    `Выберите цвет выделения для значений ниже ${threshold} (например: red или #ff0000):`
+  );
+  if (!color) {
+    alert("Цвет не задан.");
+    return;
+  }
 
-    nextTick(() => {
-      createCharts();
+  // Обновим или добавим правило
+  const existingIndex = anomalyRules.value.findIndex(
+    (r) => r.column_name === col
+  );
+  if (existingIndex !== -1) {
+    anomalyRules.value[existingIndex] = {
+      column_name: col,
+      threshold_value: Number(threshold),
+      color: color,
+    };
+  } else {
+    anomalyRules.value.push({
+      column_name: col,
+      threshold_value: Number(threshold),
+      color: color,
     });
   }
+
+  alert(
+    `Правило для "${translateColumn(
+      col
+    )}" установлено: < ${threshold}, цвет: ${color}`
+  );
+}
+
+// Загрузка при монтировании
+onMounted(async () => {
+  const storedReport = JSON.parse(localStorage.getItem("reportData"));
+  const storedTable = JSON.parse(localStorage.getItem("report_data"));
+  const formOptions = [
+    { value: "4", label: "Журнал учета дебитов скважины" },
+    { value: "10", label: "Журнал учета ремонтов скважин" },
+    { value: "13", label: "Отчет по динамике добычи" },
+  ];
+
+  if (storedReport && storedTable) {
+    reportData.tableColumns = storedReport.tableColumns || [];
+    reportData.chartColumns = storedReport.chartColumns || [];
+    tableData.rows = storedTable || [];
+
+    const selectedForm = storedReport.form;
+    const form = formOptions.find((f) => f.value === selectedForm);
+    selectedFormLabel.value = form ? form.label : "";
+
+    await loadAnomalyRules(selectedForm);
+
+    dataLoaded.value = true;
+    await nextTick();
+    createCharts();
+  }
 });
+
+async function loadAnomalyRules(formType) {
+  const token = localStorage.getItem("access_token");
+  try {
+    const response = await fetch(
+      `http://localhost:5000/api/anomaly_rules/${formType}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    const data = await response.json();
+    anomalyRules.value = data;
+  } catch (error) {
+    console.error("Ошибка загрузки правил аномалий:", error);
+  }
+}
 
 function createCharts() {
   reportData.chartColumns.forEach((field) => {
@@ -111,26 +197,26 @@ function createCharts() {
       new Chart(ctx, {
         type: "line",
         data: {
-          labels: tableData.rows.map((_, index) => `Точка ${index + 1}`),
+          labels: tableData.rows.map((_, i) => `Точка ${i + 1}`),
           datasets: [
             {
-              label: field,
+              label: translateColumn(field),
               data: tableData.rows.map((row) => row[field]),
               backgroundColor: "rgba(75, 192, 192, 0.2)",
               borderColor: "rgba(75, 192, 192, 1)",
               borderWidth: 2,
-              fill: true,
+              fill: false,
+              lineTension: 0,
+              pointRadius: 5,
+              pointBackgroundColor: "rgba(75, 192, 192, 1)",
             },
           ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: "top",
-            },
-          },
+          plugins: { legend: { position: "top" } },
+          scales: { x: { beginAtZero: true }, y: { beginAtZero: true } },
         },
       });
     }
@@ -139,7 +225,7 @@ function createCharts() {
 
 function setCellColorPickerRef(el) {
   if (el) {
-    const key = el.dataset.refKey;
+    const key = el.dataset.key;
     cellColorPickers.value[key] = el;
   }
 }
@@ -160,25 +246,54 @@ function getCellStyle(value, row, col) {
   if (highlightedCells[key]) {
     return { backgroundColor: highlightedCells[key] };
   }
-  if (
-    thresholdValue.value !== null &&
-    !isNaN(value) &&
-    value < thresholdValue.value
-  ) {
-    return { backgroundColor: highlightColor.value };
+  const rule = anomalyRules.value.find((r) => r.column_name === col);
+  if (rule && !isNaN(value) && Number(value) < rule.threshold_value) {
+    return { backgroundColor: rule.color || highlightColor.value };
   }
   return {};
+}
+
+const fieldNameMapping = {
+  id: "№",
+  month: "Месяц",
+  measurement_date: "Дата измерения",
+  liquid_flow: "Дебит жидкости (м³/сут)",
+  oil_flow: "Дебит нефти (т/сут)",
+  water_cut: "Обводненность (%)",
+  notes: "Примечания",
+  mode: "Режим",
+  pressure: "Давление (атм)",
+  exploitation_coefficient: "Коэффициент эксплуатации",
+  start_date: "Дата начала",
+  end_date: "Дата окончания",
+  repair_type: "Тип ремонта",
+  repair_reason: "Причина ремонта",
+  work_done: "Выполненные работы",
+  team: "Бригада",
+  result: "Результат",
+  well_number: "Номер скважины",
+  downtime: "Простой (часы)",
+  costs: "Затраты (руб.)",
+  period: "Период",
+  cumulative_oil: "Кумулятивный дебит нефти (т)",
+  deviation: "Отклонение (%)",
+};
+
+function translateColumn(col) {
+  return fieldNameMapping[col] || col;
 }
 
 async function saveAsPDF() {
   isPdfSaving.value = true;
   await nextTick();
 
+  const saveButton = document.querySelector(".save-button");
+  const printButton = document.querySelector(".print-button");
+  if (saveButton) saveButton.style.display = "none";
+  if (printButton) printButton.style.display = "none";
+
   const element = reportContent.value;
-  const canvas = await html2canvas(element, {
-    scale: 2,
-    useCORS: true,
-  });
+  const canvas = await html2canvas(element, { scale: 2, useCORS: true });
   const imgData = canvas.toDataURL("image/png");
   const pdf = new jsPDF("p", "mm", "a4");
 
@@ -192,14 +307,92 @@ async function saveAsPDF() {
     pdf.setPage(i);
     pdf.text(
       `Стр. ${i} из ${totalPages}`,
-      pdf.internal.pageSize.getWidth() - 50,
+      pdfWidth - 50,
       pdf.internal.pageSize.getHeight() - 10
     );
   }
 
   pdf.save("report.pdf");
+
+  if (saveButton) saveButton.style.display = "block";
+  if (printButton) printButton.style.display = "block";
+
   isPdfSaving.value = false;
 }
+
+function printReport() {
+  // Создаем скрытый контейнер, который будет содержать только элементы для печати
+  const printWindow = window.open("", "_blank", "width=800,height=600");
+  printWindow.document.write("<html><head><title>Печать отчета</title>");
+
+  // Добавляем стили для печати
+  printWindow.document.write(`
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
+      .report-page {
+        padding: 20px;
+        background: white;
+      }
+      .charts {
+        display: block;
+        margin-bottom: 30px;
+      }
+      .chart-container {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      .report-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .report-table th,
+      .report-table td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        text-align: center;
+      }
+      .save-button,
+      .print-button {
+        display: none;
+      }
+    </style>
+  `);
+
+  printWindow.document.write("</head><body>");
+
+  // Копируем содержимое текущей страницы, включая графики
+  const reportContent = document.querySelector(".report-page");
+  printWindow.document.write(reportContent.innerHTML);
+
+  printWindow.document.write("</body></html>");
+  printWindow.document.close();
+
+  // Печатаем содержимое в новом окне
+  printWindow.print();
+}
+
+const saveReportToDatabase = async () => {
+  const token = localStorage.getItem("access_token");
+  try {
+    const response = await fetch("http://localhost:5000/api/save_report", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        form_type: "form4",
+        report_data: tableData.rows,
+      }),
+    });
+    const result = await response.json();
+    alert(result.message || result.error);
+  } catch (error) {
+    alert("Ошибка при сохранении отчета: " + error.message);
+  }
+};
 </script>
 
 <style scoped>
@@ -209,17 +402,9 @@ async function saveAsPDF() {
   font-family: Arial, sans-serif;
 }
 
-.input-container {
+.username {
+  font-size: 14px;
   margin-bottom: 20px;
-}
-
-.input-container label {
-  margin-right: 10px;
-}
-
-.input-container input[type="number"] {
-  width: 100px;
-  margin-right: 20px;
 }
 
 .charts {
@@ -236,6 +421,11 @@ async function saveAsPDF() {
   background: #f9f9f9;
   padding: 10px;
   border-radius: 8px;
+}
+
+.chart-canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .report-table {
@@ -268,9 +458,14 @@ async function saveAsPDF() {
   background-color: #0056b3;
 }
 
+.save-button:disabled {
+  background-color: #aaa;
+  cursor: not-allowed;
+}
+
 @media print {
   .save-button,
-  .input-container {
+  .print-button {
     display: none;
   }
 

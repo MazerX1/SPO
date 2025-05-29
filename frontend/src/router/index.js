@@ -3,19 +3,25 @@ import { createRouter, createWebHistory } from "vue-router";
 import HomePage from "../views/HomePage.vue";
 import DataLoaderPage from "@/views/DataLoaderPage.vue";
 import ReportPage from "@/views/ReportPage.vue";
-import TableDataPage from "@/views/TableDataPage.vue";
 import ReportBuilderPage from "@/views/ReportBuilderPage.vue";
+import LoginPage from "@/views/LoginPage.vue";
+import RegisterPage from "@/views/RegisterPage.vue";
 
 const routes = [
   {
-    path: "/",
+    path: "/home",
     name: "home",
-    component: HomePage, // Используем новое имя
+    component: HomePage,
+  },
+  {
+    path: "/register",
+    name: "register",
+    component: RegisterPage,
   },
   {
     path: "/",
-    name: "TableData",
-    component: TableDataPage,
+    name: "login",
+    component: LoginPage,
   },
   {
     path: "/report-builder",
